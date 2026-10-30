@@ -117,6 +117,51 @@ NOINLINE void GuardedPack(void *destination, const void *source, std::size_t cou
       ReferencePack<T>(destination, source, count);
 }
 
+// Candidate C: compute byte planes by shifts; avoids strided source loads.
+// Only 64-bit same-type data. Other widths preserve reference implementation.
+template <typename T>
+NOINLINE void ShiftPack(void *destination, const void *source, std::size_t count)
+{
+   if constexpr (sizeof(T) != 8) {
+      ReferencePack<T>(destination, source, count);
+   } else {
+      auto *dst = reinterpret_cast<unsigned char *>(destination);
+      auto *src = reinterpret_cast<const T *>(source);
+      for (std::size_t i = 0; i < count; ++i) {
+         std::uint64_t bits = 0;
+         std::memcpy(&bits, &src[i], 8);
+         for (std::size_t b = 0; b < 8; ++b)
+            dst[b * count + i] = static_cast<unsigned char>(bits >> (8 * b));
+      }
+   }
+}
+
+// Candidate D: shift-based pack with explicit plane pointers, no inner loop.
+template <typename T>
+NOINLINE void ExplicitPack(void *destination, const void *source, std::size_t count)
+{
+   if constexpr (sizeof(T) != 8) {
+      ReferencePack<T>(destination, source, count);
+   } else {
+      auto *p0 = reinterpret_cast<unsigned char *>(destination);
+      auto *p1 = p0 + count, *p2 = p1 + count, *p3 = p2 + count;
+      auto *p4 = p3 + count, *p5 = p4 + count, *p6 = p5 + count, *p7 = p6 + count;
+      auto *src = reinterpret_cast<const T *>(source);
+      for (std::size_t i = 0; i < count; ++i) {
+         std::uint64_t v = 0;
+         std::memcpy(&v, &src[i], 8);
+         p0[i] = static_cast<unsigned char>(v);
+         p1[i] = static_cast<unsigned char>(v >> 8);
+         p2[i] = static_cast<unsigned char>(v >> 16);
+         p3[i] = static_cast<unsigned char>(v >> 24);
+         p4[i] = static_cast<unsigned char>(v >> 32);
+         p5[i] = static_cast<unsigned char>(v >> 40);
+         p6[i] = static_cast<unsigned char>(v >> 48);
+         p7[i] = static_cast<unsigned char>(v >> 56);
+      }
+   }
+}
+
 template <typename T>
 using Kernel = void (*)(void *, const void *, std::size_t);
 
@@ -128,11 +173,13 @@ struct KernelSpec {
 };
 
 template <typename T>
-constexpr std::array<KernelSpec<T>, 4> kKernels = {{
+constexpr std::array<KernelSpec<T>, 6> kKernels = {{
    {"reference", ReferencePack<T>, ReferenceUnpack<T>},
    {"planes", PlanePack<T>, PlaneUnpack<T>},
    {"tiles128", TilePack<T>, TileUnpack<T>},
    {"guarded64", GuardedPack<T>, ReferenceUnpack<T>},
+   {"shift64", ShiftPack<T>, ReferenceUnpack<T>},
+   {"explicit64", ExplicitPack<T>, ReferenceUnpack<T>},
 }};
 
 template <typename T>
@@ -185,8 +232,8 @@ void Benchmark(std::string type, std::size_t n)
    ReferencePack<T>(encoded.data(), input.data(), n);
 
    const int reps = std::clamp(static_cast<int>(4000000 / n), 8, 30000);
-   std::array<std::vector<double>, 4> packTimes, unpackTimes;
-   std::array<int, 4> order{{0, 1, 2, 3}};
+   std::array<std::vector<double>, 6> packTimes, unpackTimes;
+   std::array<int, 6> order{{0, 1, 2, 3, 4, 5}};
    std::mt19937 orderRng(5599 + static_cast<unsigned>(n));
    for (int trial = 0; trial < 9; ++trial) {
       std::shuffle(order.begin(), order.end(), orderRng);
@@ -201,7 +248,7 @@ void Benchmark(std::string type, std::size_t n)
       return v[v.size() / 2];
    };
    double baselinePack = median(packTimes[0]), baselineUnpack = median(unpackTimes[0]);
-   for (int k = 0; k < 4; ++k) {
+   for (int k = 0; k < 6; ++k) {
       double p = median(packTimes[k]), u = median(unpackTimes[k]);
       std::cout << std::fixed << std::setprecision(3)
          << "RESULT type=" << type
