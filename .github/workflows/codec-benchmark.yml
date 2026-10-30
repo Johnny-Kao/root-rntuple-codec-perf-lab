@@ -22,13 +22,14 @@ jobs:
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 ./codec-check
   benchmark:
     needs: correctness
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
         compiler: [g++, clang++]
         optimization: [O2, O3]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,15 +40,17 @@ jobs:
           ${{ matrix.compiler }} --version | sed -n '1p'
       - name: Build original and layout variants
         run: |
-          ${{ matrix.compiler }} -std=c++17 -${{ matrix.optimization }} -march=x86-64 \
+          ARCH_FLAGS=""
+          if [[ "$(uname -m)" == "x86_64" ]]; then ARCH_FLAGS="-march=x86-64"; fi
+          ${{ matrix.compiler }} -std=c++17 -${{ matrix.optimization }} $ARCH_FLAGS \
             -DNDEBUG -fno-lto -Wall -Wextra bench/split_codec.cpp -o codec-bench
       - name: Verify and benchmark each data type and size
         run: |
-          ./codec-bench | tee results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
-          grep -q '^ALL TESTS PASS' results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+          ./codec-bench | tee results-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+          grep -q '^ALL TESTS PASS' results-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
       - name: Save comparative evidence
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ matrix.compiler }}-${{ matrix.optimization }}
-          path: results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+          name: results-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.optimization }}
+          path: results-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
           retention-days: 14
