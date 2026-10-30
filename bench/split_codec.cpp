@@ -210,8 +210,10 @@ void Run(std::string type)
                         64U, 65U, 127U, 128U, 129U, 255U, 256U, 257U, 1023U, 4096U, 65536U})
       Check<T>(n);
    std::cout << "CORRECTNESS PASS type=" << type << '\n';
+#ifndef CHECK_ONLY
    for (std::size_t n : {256U, 4096U, 65536U, 262144U})
       Benchmark<T>(type, n);
+#endif
 }
 
 int main()
