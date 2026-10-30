@@ -1,0 +1,53 @@
+name: RNTuple split codec candidate benchmarks
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'bench/**'
+      - '.github/workflows/codec-benchmark.yml'
+permissions:
+  contents: read
+jobs:
+  correctness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check identical output and memory safety with ASan/UBSan
+        run: |
+          g++ -std=c++17 -O1 -g -DCHECK_ONLY -fno-omit-frame-pointer \
+            -fsanitize=address,undefined bench/split_codec.cpp -o codec-check
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 ./codec-check
+  benchmark:
+    needs: correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        optimization: [O2, O3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Collect runner environment
+        run: |
+          lscpu | awk '/Model name|CPU\\(s\\)|Architecture|Flags:/{print substr($0,1,180)}'
+          ${{ matrix.compiler }} --version | sed -n '1p'
+      - name: Build original and layout variants
+        run: |
+          ${{ matrix.compiler }} -std=c++17 -${{ matrix.optimization }} -march=x86-64 \
+            -DNDEBUG -fno-lto -Wall -Wextra bench/split_codec.cpp -o codec-bench
+      - name: Verify and benchmark each data type and size
+        run: |
+          ./codec-bench | tee results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+          grep -q '^ALL TESTS PASS' results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+      - name: Save comparative evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.compiler }}-${{ matrix.optimization }}
+          path: results-${{ matrix.compiler }}-${{ matrix.optimization }}.txt
+          retention-days: 14
