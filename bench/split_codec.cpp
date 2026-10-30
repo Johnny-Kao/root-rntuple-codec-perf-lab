@@ -106,6 +106,17 @@ NOINLINE void TileUnpack(void *destination, const void *source, std::size_t coun
    }
 }
 
+// Conservative dispatch: only use reordered planes for same-width 64-bit data.
+// Deliberately preserve the reference decoder and 32-bit encoder paths.
+template <typename T>
+NOINLINE void GuardedPack(void *destination, const void *source, std::size_t count)
+{
+   if constexpr (sizeof(T) == 8)
+      PlanePack<T>(destination, source, count);
+   else
+      ReferencePack<T>(destination, source, count);
+}
+
 template <typename T>
 using Kernel = void (*)(void *, const void *, std::size_t);
 
@@ -117,10 +128,11 @@ struct KernelSpec {
 };
 
 template <typename T>
-constexpr std::array<KernelSpec<T>, 3> kKernels = {{
+constexpr std::array<KernelSpec<T>, 4> kKernels = {{
    {"reference", ReferencePack<T>, ReferenceUnpack<T>},
    {"planes", PlanePack<T>, PlaneUnpack<T>},
    {"tiles128", TilePack<T>, TileUnpack<T>},
+   {"guarded64", GuardedPack<T>, ReferenceUnpack<T>},
 }};
 
 template <typename T>
@@ -173,8 +185,8 @@ void Benchmark(std::string type, std::size_t n)
    ReferencePack<T>(encoded.data(), input.data(), n);
 
    const int reps = std::clamp(static_cast<int>(4000000 / n), 8, 30000);
-   std::array<std::vector<double>, 3> packTimes, unpackTimes;
-   std::array<int, 3> order{{0, 1, 2}};
+   std::array<std::vector<double>, 4> packTimes, unpackTimes;
+   std::array<int, 4> order{{0, 1, 2, 3}};
    std::mt19937 orderRng(5599 + static_cast<unsigned>(n));
    for (int trial = 0; trial < 9; ++trial) {
       std::shuffle(order.begin(), order.end(), orderRng);
@@ -189,7 +201,7 @@ void Benchmark(std::string type, std::size_t n)
       return v[v.size() / 2];
    };
    double baselinePack = median(packTimes[0]), baselineUnpack = median(unpackTimes[0]);
-   for (int k = 0; k < 3; ++k) {
+   for (int k = 0; k < 4; ++k) {
       double p = median(packTimes[k]), u = median(unpackTimes[k]);
       std::cout << std::fixed << std::setprecision(3)
          << "RESULT type=" << type
